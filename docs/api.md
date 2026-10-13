@@ -1,12 +1,15 @@
 # HTTP API
 
-`app api` starts an HTTP server. The server itself lives in the core crate
-(`besi`, feature `api`); the app only supplies its routes.
+`besi::ApiCommand<R>` (feature `api`) starts an HTTP server. The server lives
+in `besi`; your app only supplies its routes and, optionally, its health check.
 
 | Part | Owned by | Code |
 |---|---|---|
-| Server, `/health`, request logging, graceful shutdown, `api` config | core | [`crates/core/src/api/`](../crates/core/src/api/) |
-| Endpoints (`/api/hello/{name}`, ...) | app | [`crates/app/src/api/`](../crates/app/src/api/): `handlers/`, `requests/`, `responses/`, `routes.rs` |
+| Server, `/health`, request logging, graceful shutdown, `api` config | `besi` | [`src/api/`](../src/api/) |
+| Endpoints, health check logic | your app | `api/`: `handlers/`, `requests/`, `responses/`, `routes.rs` ([recommended layout](getting-started.md#recommended-project-layout)) |
+
+In examples below the app registers the command as `api`, defines a
+`GET /api/hello/{name}` endpoint, and `app` stands for its binary.
 
 Stack: [axum](https://crates.io/crates/axum) 0.8 on
 [tokio](https://crates.io/crates/tokio), with
@@ -43,7 +46,7 @@ Priority: flag > env var > `.env` > `config.yaml` > default.
 
 ## Health check
 
-`GET /health` belongs to the core: the route, response format, status codes and
+`GET /health` belongs to `besi`: the route, response format, status codes and
 a timeout. The app only decides the outcome by overriding `ApiRoutes::health`.
 
 | Outcome | Status | Body |
@@ -52,32 +55,35 @@ a timeout. The app only decides the outcome by overriding `ApiRoutes::health`.
 | `Health::unhealthy("reason")` | 503 | `{"status":"unhealthy","reason":"reason"}` |
 | check takes longer than 2 s | 503 | `{"status":"unhealthy","reason":"health check timed out"}` |
 
-The default implementation always returns healthy ("the process is up"). This
-app overrides it: `AppRoutes::health` calls `handlers::health::check`
-([`crates/app/src/api/handlers/health.rs`](../crates/app/src/api/handlers/health.rs)),
-which reports unhealthy when the `hello` config section fails to load or
-`hello.greeting` is empty, the two ways its endpoints break at runtime. Add
-checks there as the app gains dependencies. The pattern, for a database:
+The default implementation always returns healthy ("the process is up").
+Override it to check what your endpoints depend on. For a database (feature
+`db`):
 
 ```rust
 impl ApiRoutes for AppRoutes {
     fn routes() -> Router<ApiState> { /* ... */ }
 
     async fn health(state: ApiState) -> Health {
-        match ping_database(state.config()).await {
+        let Ok(db) = state.db() else {
+            return Health::unhealthy("database not configured");
+        };
+        match db.ping().await {
             Ok(()) => Health::Healthy,
-            Err(err) => Health::unhealthy(format!("database: {err}")),
+            Err(_) => Health::unhealthy("database unreachable"),
         }
     }
 }
 ```
+
+Keeping the check in a plain function (e.g. `handlers::health::check(state)`)
+and calling it from `health` makes it easy to unit-test.
 
 Notes:
 
 - The reason goes into the response body and the log (`warn`). `/health` is
   usually reachable without auth, so don't put secrets, hostnames or stack
   traces in it.
-- The 2 s timeout is applied by the core; a hung dependency can't hang the
+- The 2 s timeout is applied by `besi`; a hung dependency can't hang the
   probe. Keep checks fast anyway: probes call this often.
 - A failed check doesn't stop the server; it just answers 503 until the check
   passes again.
@@ -85,18 +91,17 @@ Notes:
   liveness), add an app route such as `/api/ready`; `/health` stays the liveness
   probe.
 
-## Enabling and disabling
+## Enabling
 
-The API is a Cargo feature of `besi`, off by default. An app opts in by name:
+The API is a Cargo feature of `besi`, off by default:
 
 ```toml
-# crates/app/Cargo.toml
-besi = { workspace = true, features = ["api"] }   # API available
-besi = { workspace = true }                        # no API; axum/tokio not compiled
+besi = { git = "https://github.com/zerpto/besi", features = ["api"] }   # API available
+besi = { git = "https://github.com/zerpto/besi" }                        # no API; axum not compiled
 ```
 
 With the feature on, the app still chooses whether to expose the command by
-registering it in `crates/app/src/cmd/registry.rs`:
+adding it to its `Commands` enum, under any name:
 
 ```rust
 pub enum Commands {
@@ -105,19 +110,35 @@ pub enum Commands {
 }
 
 // in the dispatch match, same as every other command
-Self::Api(cmd) => cmd.run(ctx),
+Self::Api(cmd) => cmd.run(ctx).await,
 ```
 
-`AppRoutes` is the app's marker type implementing `besi::ApiRoutes`
-(`crates/app/src/api/routes.rs`); it is how the app hands its routes to the
-core.
+`AppRoutes` is the app's marker type implementing `besi::ApiRoutes`; it is how
+the app hands its routes to `besi`:
 
-To turn the API off: remove the variant and match arm, the `mod api;` line in
-`main.rs` and the `crates/app/src/api/` folder, then drop `features = ["api"]`.
+```rust
+use besi::axum::Router;
+use besi::axum::routing::get;
+use besi::{ApiRoutes, ApiState};
+
+/// Marker type naming this app's routes: `besi::ApiCommand<AppRoutes>`.
+#[derive(Debug)]
+pub struct AppRoutes;
+
+impl ApiRoutes for AppRoutes {
+    fn routes() -> Router<ApiState> {
+        Router::new().nest("/api", api_routes())
+    }
+}
+
+fn api_routes() -> Router<ApiState> {
+    Router::new().route("/hello/{name}", get(handlers::hello::hello))
+}
+```
 
 ## Adding an endpoint
 
-The app's `api/` folder is split by role, with one file per endpoint group in
+A layout that scales: split the app's `api/` folder by role, with one file per endpoint group in
 each folder (named the same, e.g. `hello.rs`):
 
 | Folder | Holds | Example |
@@ -178,12 +199,12 @@ A JSON request body works the same way: a `#[derive(Deserialize)]` struct in
 
 Notes:
 
-- Use axum through the core's re-export, `besi::axum::...`, so the app always
-  matches the core's axum version. The app has no direct axum dependency.
+- Use axum through the re-export, `besi::axum::...`, so the app always
+  matches `besi`'s axum version. The app needs no direct axum dependency.
 - Path parameters use axum 0.8 syntax, `/{name}` (not `/:name`).
-- Every app route is served under `/api` (set in `AppRoutes::routes()`). The
-  core's `/health` stays at the root, outside the prefix.
-- Don't define `/health` as a route; the core owns it, and overlapping routes
+- The `/api` prefix comes from `AppRoutes::routes()` (the `nest` above);
+  `besi` adds none. Its `/health` stays at the root.
+- Don't define `/health` as a route; `besi` owns it, and overlapping routes
   panic at startup. To change what "healthy" means, override
   `ApiRoutes::health` (see [Health check](#health-check)).
 - Handlers reach the database through `State<ApiState>`: `state.db()?.pool()`
@@ -217,10 +238,12 @@ async fn greets_by_name() {
 }
 ```
 
-The core tests `/health` (default, overridden, timeout), route mounting and
-404s the same way in `crates/core/src/api/server.rs`. The router builder is
-private to the core, so an app tests its health override by calling it
-directly; it is a plain async function (see the tests in `handlers/health.rs`):
+This needs `tokio` and `tower` (`features = ["util"]`) as dev-dependencies.
+
+`besi` tests `/health` (default, overridden, timeout), route mounting and 404s
+the same way in [`src/api/server.rs`](../src/api/server.rs). The full router
+builder is private, so an app tests its health override by calling it
+directly; it is a plain async function:
 
 ```rust
 #[tokio::test]
@@ -240,9 +263,9 @@ INFO request{method=GET uri=/api/hello/Ferris version=HTTP/1.1}: tower_http::tra
 
 The level comes from `RUST_LOG` (default `info`). Use it to filter, e.g.
 `RUST_LOG=warn` or `RUST_LOG=besi=debug,info`. Logging is set up only when
-`app api` starts; other commands don't install a logger.
+`ApiCommand` (or `CronCommand`) runs; other commands don't install a logger.
 
-## Core internals
+## Internals
 
 | File | Contains |
 |---|---|
@@ -255,21 +278,21 @@ The level comes from `RUST_LOG` (default `info`). Use it to filter, e.g.
 | `server.rs` | `router::<R>()`: `/health` + `R::routes()` + TraceLayer; `serve()`: bind, serve, graceful shutdown |
 
 Logging setup and the Ctrl+C / SIGTERM signal live in
-[`crates/core/src/daemon/`](../crates/core/src/daemon/), shared with `cron`.
+[`src/daemon/`](../src/daemon/), shared with `cron`.
 
 Design notes:
 
 - **`ApiCommand<R>` is a plain `Command`.** It needs the app's routes, which
   `run(ctx)` can't receive as an argument, so they arrive as a type parameter:
-  the core defines the `ApiRoutes` trait, the app implements it on a marker
-  type (`AppRoutes`), and `R::routes()` is called inside `run`. This keeps the
-  core route-agnostic and the dispatch uniform. See "Command contract" in
-  `CLAUDE.md`.
+  `besi` defines the `ApiRoutes` trait, the app implements it on a marker
+  type (`AppRoutes`), and `R::routes()` is called inside `run`. This keeps
+  `besi` route-agnostic and the app's dispatch uniform. See
+  [commands.md](commands.md#commands-that-need-app-provided-things).
 - **One runtime.** `Command::run` is async; `besi::run` owns the process's
   only tokio runtime and `ApiCommand::run` just awaits the server on it.
 - **stdout lock.** The runner passes `io::stdout()` to `Context`, not
   `io::stdout().lock()`. Holding the lock for the whole run deadlocked the
   server: tokio worker threads block forever on any stdout write. Don't
   reintroduce a long-held stdout lock.
-- `make lint` also runs clippy on `besi` with `--no-default-features`, so code
-  that only compiles with `api` on is caught.
+- `make lint` also runs clippy with `--no-default-features` and each feature
+  alone, so code that only compiles with `api` on is caught.

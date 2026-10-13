@@ -1,14 +1,17 @@
 # Cron (scheduled jobs)
 
-`app cron` runs the app's jobs on cron schedules. The scheduler lives in the
-core crate (`besi`, feature `cron`); the app only lists its jobs. **When** a job
-runs comes only from config.
+`besi::CronCommand<J>` (feature `cron`) runs the app's jobs on cron
+schedules. The scheduler lives in `besi`; the app only lists its jobs. **When**
+a job runs comes only from config.
 
 | Part | Owned by | Code |
 |---|---|---|
-| Scheduler, validation, overlap skip, logging, graceful shutdown, `cron` config | core | [`crates/core/src/cron/`](../crates/core/src/cron/) |
-| Job list (`AppJobs`) | app | [`crates/app/src/cron/registry.rs`](../crates/app/src/cron/registry.rs) |
-| Job code | app | [`crates/app/src/cron/jobs/`](../crates/app/src/cron/jobs/), one file per job |
+| Scheduler, validation, overlap skip, logging, graceful shutdown, `cron` config | `besi` | [`src/cron/`](../src/cron/) |
+| Job list (`AppJobs: CronJobs`) | your app | `cron/registry.rs` ([recommended layout](getting-started.md#recommended-project-layout)) |
+| Job code | your app | `cron/jobs/`, one file per job |
+
+In examples below the app registers the command as `cron`, has a `db_ping`
+job, and `app` stands for its binary.
 
 Built on [croner](https://crates.io/crates/croner) (cron expressions) and
 [tokio-util](https://crates.io/crates/tokio-util) (cancellation and task
@@ -108,7 +111,7 @@ Job names must be lowercase because env keys are lowercased: a job named
 
 ## Adding a job
 
-1. Create `crates/app/src/cron/jobs/<name>.rs`:
+1. Create `cron/jobs/<name>.rs`:
 
    ```rust
    use besi::{JobContext, Result};
@@ -122,16 +125,29 @@ Job names must be lowercase because env keys are lowercased: a job named
    }
    ```
 
-2. Declare it in `crates/app/src/cron/jobs/mod.rs`: `pub mod <name>;`.
+2. Declare it in `cron/jobs/mod.rs`: `pub mod <name>;`.
 
-3. Register it in `crates/app/src/cron/registry.rs`:
+3. Register it in the job list:
 
    ```rust
-   vec![
-       Job::new("db_ping", jobs::db_ping::run),
-       Job::new("cleanup_sessions", jobs::cleanup_sessions::run),
-   ]
+   use besi::{CronJobs, Job};
+
+   /// Marker type naming this app's jobs: `besi::CronCommand<AppJobs>`.
+   #[derive(Debug)]
+   pub struct AppJobs;
+
+   impl CronJobs for AppJobs {
+       fn jobs() -> Vec<Job> {
+           vec![
+               Job::new("db_ping", jobs::db_ping::run),
+               Job::new("cleanup_sessions", jobs::cleanup_sessions::run),
+           ]
+       }
+   }
    ```
+
+   The first time, also add the command to the app's `Commands` enum:
+   `Cron(besi::CronCommand<AppJobs>)`, dispatched with `cmd.run(ctx).await`.
 
 4. Schedule it in config (`cron.jobs.cleanup_sessions.schedule`). Check with
    `app cron --list`; try it with `app cron run cleanup_sessions`.
@@ -156,9 +172,15 @@ async fn fails_when_database_unreachable() {
 }
 ```
 
-See [`jobs/db_ping.rs`](../crates/app/src/cron/jobs/db_ping.rs).
+For reference, a `db_ping` job is just:
 
-## Core internals
+```rust
+pub async fn run(ctx: JobContext) -> Result<()> {
+    ctx.db()?.ping().await
+}
+```
+
+## Internals
 
 | File | Contains |
 |---|---|
@@ -170,7 +192,7 @@ See [`jobs/db_ping.rs`](../crates/app/src/cron/jobs/db_ping.rs).
 | `scheduler.rs` | per-job loops, overlap skip, `execute` (logging, panic capture), shutdown wait |
 | `command.rs` | `CronCommand<J>`: `--list`, `run <job>`, or the scheduler |
 
-Shared with `api` in [`crates/core/src/daemon/`](../crates/core/src/daemon/):
+Shared with `api` in [`src/daemon/`](../src/daemon/):
 stderr logging setup and the Ctrl+C / SIGTERM signal.
 
 Design notes:

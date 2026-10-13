@@ -1,11 +1,11 @@
 # Configuration
 
-Configuration is loaded once at startup by the core framework (`besi`), merged
-from three layers, and handed to every command through `ctx.config()`. Each
-module owns and reads its own typed section; the core never needs to know which
-sections exist.
+Configuration is loaded once at startup by `besi::run`, merged from three
+layers, and handed to every command through `ctx.config()`. Each module owns
+and reads its own typed section; `besi` never needs to know which sections
+exist.
 
-Code: [`crates/core/src/config/`](../crates/core/src/config/)
+Code: [`src/config/`](../src/config/)
 
 | File | Contains |
 |---|---|
@@ -14,8 +14,6 @@ Code: [`crates/core/src/config/`](../crates/core/src/config/)
 | `loader.rs` | `ConfigLoader` and the layering tests |
 | `args.rs` | `ConfigArgs` |
 | `sources.rs` | `.env` parsing and env source setup (internal) |
-Working example: `HelloConfig` in
-[`crates/app/src/cmd/commands/hello.rs`](../crates/app/src/cmd/commands/hello.rs).
 
 ## Layers and precedence
 
@@ -102,7 +100,7 @@ Rules:
 
 ### Typed sections (preferred)
 
-Define a struct for your module's settings and tell the core which top-level
+Define a struct for your module's settings and tell `besi` which top-level
 key it lives under:
 
 ```rust
@@ -161,14 +159,15 @@ A new integration (a database client, an HTTP client, a third-party SDK) adds
 config by:
 
 1. defining its own `ConfigSection` struct with a unique `KEY`, in its own
-   module or crate;
+   module or crate (not in `besi`);
 2. reading it with `ctx.config().section::<T>()` wherever it's needed.
 
-No changes to `besi` are needed. The core only depends on `serde`, so a section
-type can live in any crate that depends on `besi`.
+No changes to `besi` are needed. A section type only needs `serde` and the
+`ConfigSection` trait, so it can live in any crate that depends on `besi`.
 
 Choose a `KEY` that is unique across the app and isn't a common env var name
-(see [Key naming](#key-naming)). Document new sections in
+(see [Key naming](#key-naming)). `besi` itself uses `api`, `database` and
+`cron` (when those features are on). Document new sections in your app's
 `config.example.yaml` and `.env.example`.
 
 ## Best practices
@@ -187,8 +186,9 @@ toggles) can live in `config.yaml`.
 Because env sits above YAML in the [layers](#layers-and-precedence), a secret
 set in the environment always wins over any value left in a file.
 
-- **Never commit `.env`.** `.gitignore` excludes `.env` and `.env.*` but keeps
-  `.env.example`. Commit only `.env.example`, with placeholder values.
+- **Never commit `.env`.** Ignore `.env` and `.env.*` in `.gitignore` but keep
+  `.env.example` (`!.env.example`). Commit only `.env.example`, with
+  placeholder values.
 - **Treat `config.yaml` as committable.** If a file holds anything you
   wouldn't paste in a PR, it belongs in `.env`. Commit `config.example.yaml`,
   not a personal `config.yaml` (add it to `.gitignore` if yours differs per
@@ -235,10 +235,10 @@ set in the environment always wins over any value left in a file.
 ```rust
 let mut buf = Vec::new();
 let config = besi::Config::default();
-cmd.run(&mut Context::new(&mut buf, &config)).unwrap();
+cmd.run(&mut Context::new(&mut buf, &config)).await.unwrap();
 ```
 
-**The loader itself:** tests in `config/loader.rs` use the private
+**The loader itself:** tests in [`src/config/loader.rs`](../src/config/loader.rs) use the private
 `ConfigLoader::load_with_env(Some(map))`, which replaces the process
 environment with `map`. Tests never set real env vars: that's process-global
 and racy under parallel tests, and with no prefix any var could collide.
@@ -270,8 +270,8 @@ A::parse()  →  app.config_loader().load()  →  Context::new(stdout, &config) 
 ```
 
 The app opts in to the `--config` flag by flattening `ConfigArgs` into its CLI
-and returning `self.config.loader()` from `App::config_loader`. See
-[`crates/app/src/main.rs`](../crates/app/src/main.rs).
+and returning `self.config.loader()` from `App::config_loader`. See the
+[minimal app](getting-started.md#a-minimal-app).
 
 ## Implementation notes
 
@@ -283,6 +283,6 @@ and returning `self.config.loader()` from `App::config_loader`. See
   `.env` one is given the parsed file as a custom map via
   `Environment::source(Some(map))`. The env one is given `None`, which reads the
   real process environment.
-- **Name clash:** inside the core, the crate's own module is `config` and so is
+- **Name clash:** inside `besi`, the crate's own module is `config` and so is
   the dependency, so the dependency is always written `::config::...`. For the
   same reason, `Config` lives in `store.rs`, not `config/config.rs`.

@@ -1,8 +1,7 @@
 # Build output
 /target/
-/dist/
 
-# Cargo.lock is committed: this workspace ships a binary.
+# Cargo.lock is committed for reproducible CI; dependents ignore it.
 
 # Editors / IDEs
 .idea/
@@ -14,10 +13,10 @@
 .DS_Store
 Thumbs.db
 
-# Local env / secrets
+# Local config / secrets (only used when trying the crate locally)
 .env
 .env.*
-!.env.example
+config.yaml
 
 # Claude Code local settings
 .claude/settings.local.json

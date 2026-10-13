@@ -1,9 +1,0 @@
-[package]
-name = "entity"
-description = "SeaORM entities: one module per database table."
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-
-[dependencies]
-sea-orm.workspace = true

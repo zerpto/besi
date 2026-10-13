@@ -26,7 +26,7 @@ impl ApiState {
         &self.config
     }
 
-    /// Attach the database pool. `app api` does this from the command's
+    /// Attach the database pool. `ApiCommand` does this from the command's
     /// context, so handlers share the process-wide pool.
     #[cfg(feature = "db")]
     pub fn with_db(mut self, db: Db) -> Self {

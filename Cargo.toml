@@ -1,46 +1,49 @@
-[workspace]
-resolver = "3"
-members = ["crates/*"]
-
-[workspace.package]
+[package]
+name = "besi"
+description = "Framework for async console applications: commands, layered config, and optional HTTP API, PostgreSQL, ORM and cron."
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 
-[workspace.dependencies]
-besi = { path = "crates/core" }
-entity = { path = "crates/entity" }
-migration = { path = "crates/migration" }
+[dependencies]
 clap = { version = "4", features = ["derive"] }
 config = { version = "0.15", default-features = false, features = ["yaml"] }
 dotenvy = "0.15"
 serde = { version = "1", features = ["derive"] }
-
-# HTTP API (besi `api` feature)
-axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "macros", "time"] }
-tower-http = { version = "0.7", features = ["trace"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Database (besi `db` feature). No macros/migrate yet: those come with SeaORM.
-sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+# HTTP API (feature `api`)
+axum = { version = "0.8", optional = true }
+tower-http = { version = "0.7", features = ["trace"], optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
-# ORM + migrations (besi `orm` feature). SeaORM 2 is built on the same sqlx 0.9
+# Database (feature `db`). No macros/migrate: those come with SeaORM.
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"], optional = true }
+
+# ORM + migrations (feature `orm`). SeaORM 2 is built on the same sqlx 0.9
 # as `sqlx` above; keep them in step when upgrading.
-sea-orm = { version = "2", default-features = false, features = ["macros", "sqlx-postgres", "runtime-tokio-rustls", "with-chrono", "with-json", "with-uuid"] }
-sea-orm-migration = { version = "2", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+sea-orm = { version = "2", default-features = false, features = ["macros", "sqlx-postgres", "runtime-tokio-rustls", "with-chrono", "with-json", "with-uuid"], optional = true }
+sea-orm-migration = { version = "2", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls"], optional = true }
 
-# Scheduler (besi `cron` feature)
-croner = "4"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-tokio-util = { version = "0.7", features = ["rt"] }
+# Scheduler (feature `cron`)
+croner = { version = "4", optional = true }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"], optional = true }
+tokio-util = { version = "0.7", features = ["rt"], optional = true }
 
-# Test-only
+[dev-dependencies]
+async-trait = "0.1"
 tower = { version = "0.5", features = ["util"] }
+tokio = { version = "1", features = ["test-util"] }
 
-# Used by `make prod`: smaller, faster binary at the cost of build time.
-[profile.release]
-lto = true
-codegen-units = 1
-strip = true
+[features]
+# All opt-in: `besi = { git = "...", features = ["api", "db"] }`.
+default = []
+# HTTP API server and the `api` command (axum).
+api = ["dep:axum", "dep:tower-http", "dep:tracing", "dep:tracing-subscriber"]
+# PostgreSQL connection pool (sqlx), available as `ctx.db()` / `state.db()`.
+db = ["dep:sqlx"]
+# SeaORM on the `db` pool (`db.orm()`) and the `migrate` command.
+orm = ["db", "dep:sea-orm", "dep:sea-orm-migration"]
+# Job scheduler and the `cron` command (croner).
+cron = ["dep:croner", "dep:chrono", "dep:tokio-util", "dep:tracing", "dep:tracing-subscriber"]

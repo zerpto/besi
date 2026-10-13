@@ -4,10 +4,12 @@ PostgreSQL access through one shared connection pool, available everywhere:
 `ctx.db()` in commands, `state.db()` in HTTP handlers. Built on
 [sqlx](https://crates.io/crates/sqlx) 0.9 (raw SQL, no ORM).
 
-**ORM and migrations:** SeaORM on this same pool (`db.orm()`) and the
-`app migrate` command are covered in [orm.md](orm.md) (feature `orm`).
+**ORM and migrations:** SeaORM on this same pool (`db.orm()`) and
+`MigrateCommand` are covered in [orm.md](orm.md) (feature `orm`).
 
-Code: [`crates/core/src/db/`](../crates/core/src/db/) (feature `db`).
+Code: [`src/db/`](../src/db/) (feature `db`).
+
+In command-line examples, `app` stands for your binary's name.
 
 | File | Contains |
 |---|---|
@@ -54,27 +56,29 @@ Notes:
 - **The password is never printed.** `DatabaseConfig`'s `Debug` output shows
   `***`.
 - **Bad values fail at startup, for every command.** An invalid `ssl_mode` or
-  a wrong type stops even `app hello`, like any other config error. Only the
-  *connection* is lazy.
+  a wrong type stops even commands that never query, like any other config
+  error. Only the *connection* is lazy.
 
 ## Lifecycle
 
 - **One pool per process.** `besi::run` creates it after loading config,
   attaches it to the command's `Context`, and closes it when the command
-  returns. `app api` hands the same pool to `ApiState`, so handlers share it.
+  returns. `ApiCommand` hands the same pool to `ApiState` and `CronCommand`
+  to each `JobContext`, so handlers and jobs share it.
 - **Lazy.** Creating the pool opens no connection. Commands that never query
-  (`app hello`) work with no Postgres running. A wrong host or password shows
-  up on the first query.
+  work with no Postgres running. A wrong host or password shows up on the
+  first query.
 - **Cheap to clone.** `Db` clones share one pool. Don't create more pools.
 - **When unreachable**, a query waits up to `acquire_timeout_secs` then fails
   with `database error: pool timed out while waiting for an open connection`.
-  sqlx doesn't say why (refused, DNS, auth); check host, port and credentials,
-  or run `app db-check`.
+  sqlx doesn't say why (refused, DNS, auth); check host, port and
+  credentials. A small command that runs `SELECT version()` (see below) is a
+  handy way to test them.
 
 ## Using it
 
-Queries are plain sqlx against `db.pool()`. Use sqlx through the core's
-re-export, `besi::sqlx`, so the version always matches; the app has no direct
+Queries are plain sqlx against `db.pool()`. Use sqlx through the re-export,
+`besi::sqlx`, so the version always matches `besi`'s; the app needs no direct
 sqlx dependency.
 
 **In a command:**
@@ -114,7 +118,10 @@ pub async fn show(
 ```
 
 `query_as` needs `#[derive(besi::sqlx::FromRow)]` on the row type, which
-requires adding the `derive` feature to sqlx in the root `Cargo.toml`.
+requires sqlx's `derive` feature. `besi` doesn't enable it; add
+`sqlx = { version = "0.9", default-features = false, features = ["derive"] }`
+to your app, and Cargo unifies it with `besi`'s sqlx. Or use SeaORM
+([orm.md](orm.md)) for typed rows.
 
 Rules:
 
@@ -126,19 +133,33 @@ Rules:
 - `ctx.db()` / `state.db()` return `Result`: they are always set when run by
   `besi::run`, and error only in tests that didn't attach a pool.
 
-## Commands
+## Checking the connection
 
-```sh
-app db-check            # connect and print the Postgres server version
+A connection-check command is a few lines:
+
+```rust
+#[derive(Debug, Args)]
+pub struct DbCheckCommand;
+
+impl Command for DbCheckCommand {
+    async fn run(&self, ctx: &mut Context<'_>) -> Result<()> {
+        let version: String = besi::sqlx::query_scalar("SELECT version()")
+            .fetch_one(ctx.db()?.pool())
+            .await?;
+        writeln!(ctx.out(), "{version}")?;
+        Ok(())
+    }
+}
 ```
 
-Exits 1 with the database error when it can't connect.
+It exits 1 with the database error when it can't connect.
 
 ## Health
 
-The app's `/health` check ([api.md](api.md#health-check)) pings the database
-with `SELECT 1`, bounded to 1 s by `Db::ping`, under the API's 2 s health
-timeout. Database down gives `503 {"status":"unhealthy","reason":"database unreachable"}`.
+`Db::ping` runs `SELECT 1`, bounded to 1 s, which fits under the API's 2 s
+health timeout. Call it from `ApiRoutes::health` to make `/health` report the
+database ([api.md](api.md#health-check)), e.g.
+`503 {"status":"unhealthy","reason":"database unreachable"}`.
 
 ## Testing
 
@@ -157,8 +178,8 @@ No test needs a real database today. Patterns:
   let mut ctx = Context::new(&mut buf, &config).with_db(db);
   ```
 
-- **Failure paths** (unreachable, unhealthy) use exactly that; see
-  `cmd/commands/db_check.rs` and `api/handlers/health.rs`.
+- **Failure paths** (unreachable, unhealthy) use exactly that; `besi`'s own
+  tests in [`src/db/migrate.rs`](../src/db/migrate.rs) do too.
 - **Queries against real tables** need a running Postgres with the schema
   applied (`app migrate up`, see [orm.md](orm.md)).
 
@@ -169,13 +190,13 @@ No test needs a real database today. Patterns:
 Feature `db` on `besi`, independent of `api`:
 
 ```toml
-besi = { workspace = true, features = ["api", "db"] }   # this app
-besi = { workspace = true, features = ["db"] }          # CLI only, with database
+besi = { git = "https://github.com/zerpto/besi", features = ["api", "db"] }   # API with database
+besi = { git = "https://github.com/zerpto/besi", features = ["db"] }          # CLI only, with database
 ```
 
 Without it, `ctx.db()`, `Db`, `besi::sqlx` and the `database` section handling
-don't exist, and sqlx isn't compiled. `make lint` checks the core with each
-feature alone and none.
+don't exist, and sqlx isn't compiled. `make lint` checks `besi` with each
+feature alone, none, and all.
 
 sqlx is built with `runtime-tokio`, `tls-rustls` (pure Rust TLS, so the Linux
 ARM build needs no OpenSSL) and `postgres`. No `macros` or `migrate` yet.

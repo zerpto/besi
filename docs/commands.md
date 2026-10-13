@@ -1,17 +1,18 @@
 # Building a command
 
-Every subcommand is a struct that implements `besi::Command`. The app crate
-owns the commands; the core crate knows none of them.
+Every subcommand is a struct that implements `besi::Command`. Your app owns
+the commands; `besi` knows none of them.
 
 | Part | Where |
 |---|---|
-| `Command` trait | [`crates/core/src/cli/command.rs`](../crates/core/src/cli/command.rs) |
-| `Context` (stdout writer, config, database pool) | [`crates/core/src/cli/context.rs`](../crates/core/src/cli/context.rs) |
-| Your commands | [`crates/app/src/cmd/commands/`](../crates/app/src/cmd/commands/), one file per command |
-| Module declarations | [`crates/app/src/cmd/commands/mod.rs`](../crates/app/src/cmd/commands/mod.rs) (imports/exports only) |
-| `Commands` enum + dispatch | [`crates/app/src/cmd/registry.rs`](../crates/app/src/cmd/registry.rs) |
+| `Command` trait | [`src/cli/command.rs`](../src/cli/command.rs) |
+| `Context` (stdout writer, config, database pool) | [`src/cli/context.rs`](../src/cli/context.rs) |
+| `App` trait (top-level CLI + its config loader) | [`src/cli/app.rs`](../src/cli/app.rs) |
+| `run::<A>()` (runtime, config, pool, exit code) | [`src/cli/runner.rs`](../src/cli/runner.rs) |
 
-[`hello.rs`](../crates/app/src/cmd/commands/hello.rs) is a complete working example.
+The paths in your app used below (`cmd/commands/`, `cmd/registry.rs`) follow
+the [recommended layout](getting-started.md#recommended-project-layout). In
+command-line examples, `app` stands for your binary's name.
 
 ## The contract
 
@@ -33,7 +34,7 @@ pub trait Command {
 
 ## Adding a command
 
-### 1. Create `crates/app/src/cmd/commands/<name>.rs`
+### 1. Create `cmd/commands/<name>.rs`
 
 ```rust
 use besi::{Command, Context, Result};
@@ -66,13 +67,13 @@ attributes on the struct. Doc comments on fields become the `--help` text.
 ### 2. Declare it in `mod.rs`, register it in `registry.rs`
 
 ```rust
-// crates/app/src/cmd/commands/mod.rs: declarations only
+// cmd/commands/mod.rs
 pub mod greet;                          // 1. declare the module
 ```
 
 ```rust
-// crates/app/src/cmd/registry.rs
-use super::commands::{db_check, greet, hello};
+// cmd/registry.rs
+use super::commands::{greet, hello};
 
 pub enum Commands {
     /// Print a greeting             // 2. this doc comment is the help text
@@ -122,8 +123,7 @@ mod tests {
 ### 4. Try it
 
 ```sh
-make run ARGS="greet Ferris --loud"
-make check            # fmt check + clippy + tests
+cargo run -- greet Ferris --loud
 ```
 
 ## Arguments and flags
@@ -250,7 +250,7 @@ fn rejects_missing_positional() {
 ## Reading configuration
 
 Give the command its own `ConfigSection` and read it with
-`ctx.config().section()`. Never put command-specific config in `crates/core`.
+`ctx.config().section()`. Config sections live in your app, not in `besi`.
 
 ```rust
 #[derive(Debug, Deserialize)]
@@ -291,8 +291,7 @@ let n: i64 = besi::sqlx::query_scalar("SELECT count(*) FROM users")
 ```
 
 In tests, attach a pool with `Context::new(&mut buf, &config).with_db(db)`.
-See [database.md](database.md) for config, lifecycle and testing, and
-[`db_check.rs`](../crates/app/src/cmd/commands/db_check.rs) for a working command.
+See [database.md](database.md) for config, lifecycle and testing.
 
 ## Subcommands of subcommands
 
@@ -324,26 +323,23 @@ impl Command for DbCommand {
 ## Commands that need app-provided things
 
 Some commands need something only the app can supply (routes, a job list,
-plugins). Do not add a `serve(ctx, extra)`-style method. Instead:
+migrations). They don't take it as an extra method or argument. Instead:
 
-1. The core defines a small trait for that thing (like `ApiRoutes`).
-2. The core command is generic over it, `MyCommand<P: MyProvider>`, holding
+1. A small trait describes that thing (like `besi::ApiRoutes`).
+2. The command is generic over it, `MyCommand<P: MyProvider>`, holding
    `PhantomData<fn() -> P>` marked `#[arg(skip)]` so clap can still build it.
 3. The app implements the trait on a marker type and names it in the enum:
-   `My(besi::MyCommand<AppProvider>)`. The match arm stays `cmd.run(ctx).await`.
+   `My(MyCommand<AppProvider>)`. The match arm stays `cmd.run(ctx).await`.
 
-[`ApiCommand<R>`](../crates/core/src/api/command.rs) is the reference
-implementation; [api.md](api.md) describes it. Code behind a Cargo feature must
-be `#[cfg(feature = "...")]`-gated in `crates/core/src/lib.rs`.
-
-If a command truly cannot fit this shape, change the `Command` trait for all
-commands rather than adding a one-off path.
+`besi`'s own `ApiCommand<R: ApiRoutes>`, `CronCommand<J: CronJobs>` and
+`MigrateCommand<M: MigratorTrait>` follow this pattern
+([`src/api/command.rs`](../src/api/command.rs) is the reference). Use it for
+reusable commands of your own too.
 
 ## Checklist
 
 - [ ] `#[derive(Debug, Args)]` struct implementing `besi::Command`
 - [ ] Output via `ctx.out()`, errors via `besi::Result` / `Error::msg`
-- [ ] `pub mod` line in `cmd/commands/mod.rs`; enum variant (with doc comment) and `cmd.run(ctx).await` arm in `cmd/registry.rs`
+- [ ] Enum variant (with doc comment) and `cmd.run(ctx).await` match arm
 - [ ] Unit test in the command's file
-- [ ] Config in its own `ConfigSection`, not in `crates/core`
-- [ ] `make check` passes
+- [ ] Config in its own `ConfigSection`
