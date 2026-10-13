@@ -1,0 +1,23 @@
+# Build output
+/target/
+/dist/
+
+# Cargo.lock is committed: this workspace ships a binary.
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Claude Code local settings
+.claude/settings.local.json

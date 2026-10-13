@@ -1,0 +1,25 @@
+# Copy to config.yaml. Values here are overridden by .env, then by env vars.
+hello:
+  greeting: Hello
+
+# HTTP API (`app api`). --host / --port flags override these.
+api:
+  host: 127.0.0.1
+  port: 8080
+
+# PostgreSQL (feature `db`). Put the password in .env, not here.
+database:
+  host: localhost
+  port: 5432
+  username: postgres
+  name: postgres
+  ssl_mode: prefer
+  max_connections: 10
+
+# Scheduled jobs (`app cron`). Schedules are UTC; a job without one never runs.
+cron:
+  shutdown_timeout_secs: 30
+  jobs:
+    db_ping:
+      schedule: "*/30 * * * * *"   # sec min hour day month weekday
+      enabled: false

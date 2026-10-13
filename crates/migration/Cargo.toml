@@ -1,0 +1,9 @@
+[package]
+name = "migration"
+description = "SeaORM migrations, applied by `app migrate`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+sea-orm-migration.workspace = true

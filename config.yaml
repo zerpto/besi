@@ -1,0 +1,3 @@
+# Copy to config.yaml. Values here are overridden by .env, then by env vars.
+hello:
+  greeting: Hai

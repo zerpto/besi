@@ -1,0 +1,23 @@
+[package]
+name = "app"
+description = "Console application built on the besi framework."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# The executable name. Change it here to rename the binary
+# (e.g. `name = "mytool"` gives `dist/prod/mytool`).
+[[bin]]
+name = "app"
+path = "src/main.rs"
+
+[dependencies]
+besi = { workspace = true, features = ["api", "cron", "db", "orm"] }
+clap.workspace = true
+serde.workspace = true
+entity.workspace = true
+migration.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tower.workspace = true
